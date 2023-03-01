@@ -12,3 +12,4 @@ Paper II
 - Coating non-uniformity on segments
 - Polarization mitigation strategies
 - Wavefront control with Coronagraph: VVC and vAPP
+
