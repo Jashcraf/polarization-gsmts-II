@@ -20,6 +20,7 @@ class Instrument:
         
         # Configure grids
         pupil_grid = make_pupil_grid(self.pupil_pixels,self.pupil_pixels*self.pupil_sampling)
+        
         # image_grid = make_focal_grid()
         
         pass
