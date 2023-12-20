@@ -1,10 +1,12 @@
 """Contains GSMT forward modeling situation"""
-
+# changelog
 from hcipy import *
-from poke.poke_core import Rayfront
 from poke.interfaces import jones_pupil_to_hcipy_wavefront
+from poke.writing import read_serial_to_rayfront
+import poke.plotting as plot
 from matplotlib import pyplot as plt
 import numpy as np
+
 # from filter_specs import *
 import os
 from prysm import (
@@ -24,7 +26,8 @@ sim_params = {
     'npix_pupil' : 1024,
     'segment variation' : True,
 	'q_focal' : 5,
-	'nairy_focal' : 15
+	'nairy_focal' : 15,
+	'random seed': 24601
 }
 
 filters = {
@@ -81,7 +84,8 @@ def create_tmt_aperture_and_phase(diameter=tmt_conf['D_tel'],
 								ref_thickness=tmt_conf['nominal thickness'],
 								pv_frac=tmt_conf['aberration ptv'],
 								npix=sim_params['npix_pupil'],
-								nmodes=4):
+								nmodes=4,
+								rand_seed=sim_params['random seed']):
 	"""uses prysm to generate the tmt aperture with a mode basis"""
 
 	# update the surface with segment thickness, maybe a mask_rays() function?
@@ -109,6 +113,7 @@ def create_tmt_aperture_and_phase(diameter=tmt_conf['D_tel'],
 	nms = [polynomials.noll_to_nm(j) for j in range(nmodes+1)]
 	cha.prepare_opd_bases(polynomials.zernike_nm_sequence, nms, normalization_radius=1.44/2);
 	basis_coefs = np.zeros((len(cha.segment_ids), len(nms)), dtype=config.precision)
+	np.random.seed(rand_seed)
 	basis_coefs[:, 0] = np.random.uniform(-500, 500, 492)
 	basis_coefs[:, 1] = np.random.uniform(-1000, 1000, 492)
 	basis_coefs[:, 2] = np.random.uniform(-1000, 1000, 492)
@@ -120,7 +125,7 @@ def create_tmt_aperture_and_phase(diameter=tmt_conf['D_tel'],
 
 	return cha.amp.ravel(),phase_map.ravel()
 
-tmt_conf.update({'aperture':create_tmt_aperture_and_phase()})
+tmt_conf.update({'aperture':create_tmt_aperture_and_phase}) # make this a generator instead
 
 
 def create_elt_aperture_and_phase(diameter=elt_conf['D_tel'],
@@ -128,10 +133,10 @@ def create_elt_aperture_and_phase(diameter=elt_conf['D_tel'],
 								pv_frac=elt_conf['aberration ptv'],
 								npix=sim_params['npix_pupil'],
 								nmodes=4,
-								display_numbered_pupils=False):
+								display_numbered_pupils=False,
+								rand_seed=sim_params['random seed']):
 	
 	# source: https://elt.eso.org/mirror/M1/
-	
 	
 	# compose segmented
 	x, y = coordinates.make_xy_grid(npix, diameter=diameter)
@@ -169,6 +174,7 @@ def create_elt_aperture_and_phase(diameter=elt_conf['D_tel'],
 	nms = [polynomials.noll_to_nm(j) for j in range(nmodes+1)]
 	cha.prepare_opd_bases(polynomials.zernike_nm_sequence, nms, normalization_radius=1.45/2)
 	basis_coefs = np.zeros((len(cha.segment_ids), len(nms)), dtype=config.precision)
+	np.random.seed(rand_seed)
 	basis_coefs[:, 0] = np.random.uniform(-500, 500, 798)
 	basis_coefs[:, 1] = np.random.uniform(-1000, 1000, 798)
 	basis_coefs[:, 2] = np.random.uniform(-1000, 1000, 798)
@@ -181,7 +187,7 @@ def create_elt_aperture_and_phase(diameter=elt_conf['D_tel'],
 	return cha.amp.ravel(),phase_map.ravel()
 
 
-elt_conf.update({'aperture':create_elt_aperture_and_phase()})
+elt_conf.update({'aperture':create_elt_aperture_and_phase})
 	
 
 def sim_gsmt_jones_pupil(sim_params, tele_conf):
@@ -192,7 +198,8 @@ def sim_gsmt_jones_pupil(sim_params, tele_conf):
 	npix = sim_params['npix_pupil']
 	wvl = sim_params['wavelength']
 	coating_index = tele_conf['coating index']
-	substrate_index = tele_conf['substrate index'] 
+	substrate_index = tele_conf['substrate index']
+	randseed = sim_params['random seed']
 
 	# Assemble grids
 	grid = make_pupil_grid(npix,D_tel)
@@ -211,6 +218,7 @@ def sim_gsmt_jones_pupil(sim_params, tele_conf):
 		if sim_params['segment variation'] == True:
 			exponent = tele_conf['n']
 			nominal_ptv = 0.02 * tele_conf['nominal thickness']
+			np.random.seed(randseed)
 			layer = SurfaceAberration(grid, ptv=nominal_ptv, diameter=np.sqrt(2)*D_tel, exponent=exponent).phase(wvl)
 			layer /= np.max(layer)
 			layer *= nominal_ptv
@@ -221,7 +229,8 @@ def sim_gsmt_jones_pupil(sim_params, tele_conf):
 	else:
 
 		# construct aperture
-		aperture,phase = tele_conf['aperture']
+		print(randseed)
+		aperture,phase = tele_conf['aperture'](rand_seed=randseed)
 		aperture = Field(aperture,grid)
 
 		# create the low-order aberrations
@@ -260,12 +269,18 @@ def sim_gsmt_jones_pupil(sim_params, tele_conf):
 		m3 = {'surf':5,'coating':nominal_layer,'mode':'reflect'}
 		surflist = [m1,m2,m3]
 	
-	# Poke is yummy
-	rf = Rayfront(npix,wvl,D_tel/2,max_fov=1e-3,circle=False)
-	rf.as_polarized(surflist)
-	rf.trace_rayset(tele_conf['pth'])
-	rf.wavelength = wvl
+	if sim_params['poke.Rayfront'] is None:
+		# Poke is yummy
+		from poke.poke_core import Rayfront
+		rf = Rayfront(npix,wvl,D_tel/2,max_fov=1e-3,circle=False)
+		rf.as_polarized(surflist)
+		rf.trace_rayset(tele_conf['pth'])
 
+	else: # load the rayfront
+		rf = read_serial_to_rayfront(sim_params['poke.Rayfront'])
+		rf.surfaces = surflist
+	
+	rf.wavelength = wvl
 	rf.compute_jones_pupil(aloc=np.array([0.,1.,0.]))
 
 	wvfnt = jones_pupil_to_hcipy_wavefront(rf.jones_pupil,grid,shape=npix)
@@ -273,12 +288,13 @@ def sim_gsmt_jones_pupil(sim_params, tele_conf):
 	wvfnt.total_power = 1.0
 	wvfnt.wavelength = wvl
 
-	# apply perfect AO system
+	# apply perfect AO system by correcting the mean aberration
 	avg_phase = (wvfnt.phase[0,0] + wvfnt.phase[1,1]) / 2
 	wvfnt.electric_field *= np.exp(-1j*avg_phase)
 
 	norm = prop(wvfnt).power.max()
+	wvfnt.electric_field /= np.sqrt(norm)
 	coronagraph = PerfectCoronagraph(aperture, sim_params['order'])
 	wfout = prop(coronagraph(wvfnt))
 
-	return wfout.power / norm
+	return wfout
