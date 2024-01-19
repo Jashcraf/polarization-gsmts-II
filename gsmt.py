@@ -200,6 +200,7 @@ def sim_gsmt_jones_pupil(sim_params, tele_conf):
 	coating_index = tele_conf['coating index']
 	substrate_index = tele_conf['substrate index']
 	randseed = sim_params['random seed']
+	aberration_scale = tele_conf['aberration ptv']
 
 	# Assemble grids
 	grid = make_pupil_grid(npix,D_tel)
@@ -229,13 +230,13 @@ def sim_gsmt_jones_pupil(sim_params, tele_conf):
 	else:
 
 		# construct aperture
-		print(randseed)
 		aperture,phase = tele_conf['aperture'](rand_seed=randseed)
 		aperture = Field(aperture,grid)
 
 		# create the low-order aberrations
 		if sim_params['segment variation'] == True:
-			layer = phase
+			# phase /= np.max(phase)
+			layer = phase  #* aberration_scale * tele_conf['nominal thickness']
 
 		else:
 			layer = np.full_like(phase,tele_conf['nominal thickness'])
@@ -293,8 +294,7 @@ def sim_gsmt_jones_pupil(sim_params, tele_conf):
 	wvfnt.electric_field *= np.exp(-1j*avg_phase)
 
 	norm = prop(wvfnt).power.max()
-	wvfnt.electric_field /= np.sqrt(norm)
 	coronagraph = PerfectCoronagraph(aperture, sim_params['order'])
 	wfout = prop(coronagraph(wvfnt))
-
+	wfout.electric_field /= np.sqrt(norm)
 	return wfout
