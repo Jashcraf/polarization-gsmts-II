@@ -120,8 +120,8 @@ def create_tmt_aperture_and_phase(diameter=tmt_conf['D_tel'],
 	basis_coefs[:, 3:] = np.random.uniform(-1000, 1000, 492*(nmodes-2)).reshape((492,nmodes-2))
 	phase_map = cha.compose_opd(basis_coefs)
 	phase_map /= np.max(np.abs(phase_map))
-	phase_map *= ref_thickness*pv_frac
-	phase_map += ref_thickness
+	# phase_map *= ref_thickness*pv_frac
+	# phase_map += ref_thickness
 
 	return cha.amp.ravel(),phase_map.ravel()
 
@@ -181,16 +181,32 @@ def create_elt_aperture_and_phase(diameter=elt_conf['D_tel'],
 	basis_coefs[:, 3:] = np.random.uniform(-1000, 1000, 798*(nmodes-2)).reshape((798,nmodes-2))
 	phase_map = cha.compose_opd(basis_coefs)
 	phase_map /= np.max(np.abs(phase_map))
-	phase_map *= ref_thickness*pv_frac
-	phase_map += ref_thickness
+
+	# TODO: Add these to the sim function
+	# phase_map *= ref_thickness*pv_frac
+	# phase_map += ref_thickness
 
 	return cha.amp.ravel(),phase_map.ravel()
 
+elt_conf.update({'aperture':create_elt_aperture_and_phase}) 
 
-elt_conf.update({'aperture':create_elt_aperture_and_phase})
-	
+def sim_gsmt_jones_pupil(sim_params, tele_conf, tilt=[0, 0], coro=True):
+	"""compute psf of a gsmt with segment variations
 
-def sim_gsmt_jones_pupil(sim_params, tele_conf):
+	Parameters
+	----------
+	sim_params : dict
+		dictionary containing simulation parameters
+	tele_conf : dict
+		dictionary belonging to the tmt, gmt, or elt
+	tilt : list, optional
+		tilt in lambda / D to apply to the wavefront, by default [0, 0]
+
+	Returns
+	-------
+	_type_
+		_description_
+	"""
 
 	# set up the problem
 	D_tel = tele_conf['D_tel']
@@ -200,7 +216,7 @@ def sim_gsmt_jones_pupil(sim_params, tele_conf):
 	coating_index = tele_conf['coating index']
 	substrate_index = tele_conf['substrate index']
 	randseed = sim_params['random seed']
-	aberration_scale = tele_conf['aberration ptv']
+	aberration_scale = tele_conf['aberration ptv'] # TODO: THIS DOESN'T GET UPDATED
 
 	# Assemble grids
 	grid = make_pupil_grid(npix,D_tel)
@@ -235,7 +251,11 @@ def sim_gsmt_jones_pupil(sim_params, tele_conf):
 
 		# create the low-order aberrations
 		if sim_params['segment variation'] == True:
+
+			# scale the phase
 			# phase /= np.max(phase)
+			phase *= tele_conf['nominal thickness'] * aberration_scale
+			phase += tele_conf['nominal thickness']
 			layer = phase  #* aberration_scale * tele_conf['nominal thickness']
 
 		else:
@@ -286,6 +306,8 @@ def sim_gsmt_jones_pupil(sim_params, tele_conf):
 
 	wvfnt = jones_pupil_to_hcipy_wavefront(rf.jones_pupil,grid,shape=npix)
 	wvfnt.electric_field *= aperture
+
+
 	wvfnt.total_power = 1.0
 	wvfnt.wavelength = wvl
 
@@ -293,8 +315,16 @@ def sim_gsmt_jones_pupil(sim_params, tele_conf):
 	avg_phase = (wvfnt.phase[0,0] + wvfnt.phase[1,1]) / 2
 	wvfnt.electric_field *= np.exp(-1j*avg_phase)
 
+	# apply tilt
+	tilt_rad = [wvl/D_tel * i for i in tilt] # tilt in radians
+	wvfnt.electric_field *= np.exp(2j * np.pi / wvl * (grid.x * tilt_rad[0] + grid.y * tilt_rad[1]))
+
 	norm = prop(wvfnt).power.max()
-	coronagraph = PerfectCoronagraph(aperture, sim_params['order'])
-	wfout = prop(coronagraph(wvfnt))
+	
+	if coro:
+		coronagraph = PerfectCoronagraph(aperture, sim_params['order'])
+		wfout = prop(coronagraph(wvfnt))
+	else:
+		wfout = prop(wvfnt)
 	wfout.electric_field /= np.sqrt(norm)
 	return wfout
